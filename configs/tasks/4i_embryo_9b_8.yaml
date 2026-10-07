@@ -1,0 +1,16 @@
+data:
+  features: /data/active/rhornb/cellot/9b_8/datasets/features.txt
+  path: /data/active/rhornb/cellot/9b_8/datasets/embryo_dataset.h5ad
+  condition: timepoint
+  source: late
+  target: early
+  type: cell
+
+dataloader:
+  batch_size: 256
+  shuffle: true
+
+datasplit:
+  groupby: timepoint
+  name: train_test
+  test_size: 0.2

@@ -1,0 +1,28 @@
+[workspace]
+name = "cellot"
+version = "0.1.0"
+description = "Learning Single-Cell Perturbation Responses using Neural Optimal Transport"
+channels = ["conda-forge", "pytorch"]
+platforms = ["linux-64"]
+
+[dependencies]
+python = ">=3.9,<3.10"
+setuptools = "*"
+numpy = "*"
+matplotlib = "*"
+scanpy = "*"
+jupyterlab = "*"
+ipython = "*"
+anndata = "*"
+pandas = "*"
+scipy = "*"
+scikit-learn = "*"
+seaborn = "*"
+pytables = "*"
+pytorch = {channel = "pytorch"}
+torchvision = {channel = "pytorch"}
+pyyaml = "*"
+
+[pypi-dependencies]
+ml-collections = "*"
+cellot = {path = ".", editable = true}

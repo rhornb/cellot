@@ -1,4 +1,5 @@
 from pathlib import Path
+from anndata import AnnData
 import numpy as np
 import pandas as pd
 from absl import app, flags
@@ -126,6 +127,26 @@ def main(argv):
         treateddf.columns = treateddf.columns.astype(str)
 
         assert imputeddf.columns.equals(treateddf.columns)
+
+        control_cache = outdir/ 'control.h5ad'
+        treated_cache = outdir/ 'treated.h5ad'
+
+        controleddf, treateddf, imputed = load_conditions(
+                expdir, where, setting, embedding=embedding)
+
+        imputed.write(cache)
+
+        # Save control cells in .h5ad format
+        controledad = AnnData(X=controleddf.values)
+        controledad.obs_names = controleddf.index 
+        controledad.var_names = controleddf.columns
+        controledad.write(control_cache)
+
+        # Save treated cells in .h5ad format
+        treatedad = AnnData(X=treateddf.values)
+        treatedad.obs_names = treateddf.index 
+        treatedad.var_names = treateddf.columns
+        treatedad.write(treated_cache)
 
         def load_markers():
             data = read_single_anndata(config, path=None)

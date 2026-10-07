@@ -10,25 +10,17 @@ Understanding and predicting molecular responses in single cells upon chemical, 
 
 This repository contains the `CellOT` method and evaluation scripts to reproduce the results of experiments on predicting single-cell drug responses, as profiled by scRNA-seq and a multiplexed protein imaging technology. Further, we provide experiments on `CellOT`'s generalization performance to unseen settings by (a) predicting the scRNA-seq responses of holdout lupus patients exposed to IFN-beta, and (b) modeling the hematopoietic developmental trajectories of different subpopulations.
 
-## Installation
+### Installation with pixi
 
-To setup the corresponding `conda` environment run:
+The environment can be set up with [pixi](https://pixi.sh), using the `pixi.toml` and `pixi.lock` files in the repository root. Install pixi (if not already available):
 ```
-conda create --name cellot python=3.9.5
-conda activate cellot
-
-conda update -n base -c defaults conda
-pip install --upgrade pip
+curl -fsSL https://pixi.sh/install.sh | bash
 ```
-Install requirements and dependencies via:
+Then, from the repository root, create the environment (this also installs `CellOT` in editable mode):
 ```
-pip install -r requirements.txt
+pixi install
 ```
-To install `CellOT` run:
-```
-python setup.py develop
-```
-Package requirements and dependencies are listed in `requirements.txt`. Installation takes < 5 minutes and has been tested on Linux (CentOS Linux release 7.9.2009), macOS (Version 12.4, with Apple M1 Pro and Version 11.3, with 2.6 GHz Intel Core i7). 
+Commands can be run inside the environment with `pixi run <command>` (e.g., `pixi run python scripts/train.py ...`), or an interactive shell can be opened with `pixi shell`. 
 
 ## Datasets
 You can download the preprocessed data [here](https://www.research-collection.ethz.ch/handle/20.500.11850/609681).
@@ -45,6 +37,46 @@ The training of CellOT on 4i data takes around 3 hours on CPU. Once trained, the
 python ./scripts/evaluate.py --outdir ./results/4i/drug-cisplatin/model-cellot --setting iid --where data_space
 ```
 The user can hereby choose if the model is evaluated in the `iid` or `ood` setting, and if the metrics are considered in the data or latent space (via the flag `where`). Please note that for 4i data, no o.o.s. or o.o.d. task exists and no embedding is necessary (i.e., evaluation in `data_space`).
+
+### Training with `run_train_cellot.sh`
+
+`run_train_cellot.sh` wraps `scripts/train.py` in the pixi environment and contains `#SBATCH` headers for submission to a SLURM cluster (16 GB memory, 4 CPUs, up to 7 days). Before running, edit the script to set:
+- `--outdir`: directory where the trained model (`cache/model.pt`), the resolved `config.yaml`, and logs are written.
+- `--config configs/tasks/<task>.yaml`: the task config, which defines the dataset (`data.path`), the feature list (`data.features`), the condition column in `obs` (`data.condition`) and its `source`/`target` values, as well as the train/test split.
+- `--config configs/models/cellot.yaml`: the model config (keep as is for CellOT).
+
+For example:
+```
+exec pixi run python scripts/train.py \
+    --outdir /path/to/results/8_7d \
+    --config configs/tasks/4i_embryo_8_7d.yaml \
+    --config configs/models/cellot.yaml
+```
+Then submit the job via SLURM:
+```
+sbatch run_train_cellot.sh
+```
+or run it directly on the current machine:
+```
+bash run_train_cellot.sh
+```
+SLURM logs are written to `slurm-<jobid>_<taskid>.out` / `.err` in the submission directory.
+
+### Prediction
+
+Once a model is trained, `scripts/predict.py` applies the learned transport map to a dataset and writes the predicted cells as an `.h5ad` file:
+```
+pixi run python scripts/predict.py \
+    --outdir /path/to/results/8_7d \
+    --data /path/to/new_dataset.h5ad \
+    --output /path/to/predictions.h5ad
+```
+Flags:
+- `--outdir` (required): the training output directory; the model is loaded from `<outdir>/cache/model.pt` and the config from `<outdir>/config.yaml`.
+- `--data` (optional): input `.h5ad` file to predict on. Defaults to `data.path` from the training config.
+- `--output` (optional): path of the predicted `.h5ad`. Defaults to `<outdir>/evals_iid_data_space/imputed_full.h5ad`.
+
+No train/test split is applied: all cells whose condition (`data.condition`) matches the configured `source` or `target` value are transported. The input data must therefore contain this `obs` column with those values, as well as all features listed in `data.features`. The output keeps the input `obs` and `var` annotations, with `X` replaced by the predicted values.
 
 ## Citation
 
