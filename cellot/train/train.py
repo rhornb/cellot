@@ -9,7 +9,7 @@ from absl.flags import FLAGS
 from cellot import losses
 from cellot.utils.loaders import load
 from cellot.models.cellot import compute_loss_f, compute_loss_g, compute_w2_distance
-from cellot.train.summary import Logger
+from cellot.train.summary import Logger, plot_eval_metric
 from cellot.data.utils import cast_loader_to_iterator
 from cellot.models.ae import compute_scgen_shift
 from tqdm import trange
@@ -39,6 +39,31 @@ def load_item_from_save(path, key, default):
         return default
 
     return ckpt[key]
+
+
+class EarlyStopper:
+    """Patience-based early stopping on a metric where lower is better.
+
+    Disabled (never stops) when ``config.training.patience`` is unset.
+    Optional keys: ``min_delta`` (required improvement, default 0) and
+    ``min_steps`` (no stopping before this step, default 0).
+    """
+
+    def __init__(self, config, bad_evals=0):
+        self.patience = config.training.get("patience", None)
+        self.min_delta = config.training.get("min_delta", 0.0)
+        self.min_steps = config.training.get("min_steps", 0)
+        self.bad_evals = bad_evals
+
+    def is_improvement(self, value, best):
+        return value < best - self.min_delta
+
+    def update(self, improved, step):
+        """Record an evaluation; return True if training should stop."""
+        self.bad_evals = 0 if improved else self.bad_evals + 1
+        if self.patience is None or step < self.min_steps:
+            return False
+        return self.bad_evals >= self.patience
 
 
 def train_cellot(outdir, config):
@@ -91,6 +116,10 @@ def train_cellot(outdir, config):
 
     minmmd = load_item_from_save(cachedir / "model.pt", "minmmd", np.inf)
     mmd = minmmd
+    stopper = EarlyStopper(
+        config, load_item_from_save(cachedir / "last.pt", "bad_evals", 0)
+    )
+    stopped_step = None
 
     if 'pair_batch_on' in config.training:
         keys = list(iterator.train.target.keys())
@@ -148,21 +177,43 @@ def train_cellot(outdir, config):
 
         if step % config.training.eval_freq == 0:
             mmd = evaluate()
+            improved = stopper.is_improvement(mmd, minmmd)
             if mmd < minmmd:
                 minmmd = mmd
                 torch.save(
                     state_dict(f, g, opts, step=step, minmmd=minmmd),
                     cachedir / "model.pt",
                 )
+            if stopper.update(improved, step):
+                logging.info(
+                    f"Early stopping at step {step}: no MMD improvement in "
+                    f"{stopper.bad_evals} evals (best {minmmd:.6f})."
+                )
+                stopped_step = step
+                break
 
         if step % config.training.cache_freq == 0:
-            torch.save(state_dict(f, g, opts, step=step), cachedir / "last.pt")
+            torch.save(
+                state_dict(f, g, opts, step=step, bad_evals=stopper.bad_evals),
+                cachedir / "last.pt",
+            )
 
             logger.flush()
 
-    torch.save(state_dict(f, g, opts, step=step), cachedir / "last.pt")
+    torch.save(
+        state_dict(f, g, opts, step=step, bad_evals=stopper.bad_evals),
+        cachedir / "last.pt",
+    )
 
     logger.flush()
+
+    try:
+        plot_eval_metric(
+            outdir / "cache/scalars", outdir / "mmd.png", metric="mmd",
+            stopped_step=stopped_step,
+        )
+    except Exception as e:  # a plotting failure must not lose a trained model
+        logging.warning(f"Could not plot eval MMD: {e}")
 
     return
 
@@ -207,6 +258,9 @@ def train_auto_encoder(outdir, config):
     )
 
     eval_loss = best_eval_loss
+    stopper = EarlyStopper(
+        config, load_item_from_save(cachedir / "last.pt", "bad_evals", 0)
+    )
 
     ticker = trange(step, n_iters, initial=step, total=n_iters)
     for step in ticker:
@@ -227,15 +281,33 @@ def train_auto_encoder(outdir, config):
 
         if step % config.training.eval_freq == 0:
             model.eval()
-            eval_loss = evaluate(next(iterator.test))
+            eval_loss = evaluate(next(iterator.test)).item()
+            improved = stopper.is_improvement(eval_loss, best_eval_loss)
             if eval_loss < best_eval_loss:
                 best_eval_loss = eval_loss
-                sd = state_dict(model, optim, step=(step + 1), eval_loss=eval_loss)
+                sd = state_dict(
+                    model,
+                    optim,
+                    step=(step + 1),
+                    eval_loss=eval_loss,
+                    best_eval_loss=best_eval_loss,
+                )
 
                 torch.save(sd, cachedir / "model.pt")
+            if stopper.update(improved, step):
+                logging.info(
+                    f"Early stopping at step {step}: no eval loss improvement "
+                    f"in {stopper.bad_evals} evals (best {best_eval_loss:.6f})."
+                )
+                break
 
         if step % config.training.cache_freq == 0:
-            torch.save(state_dict(model, optim, step=(step + 1)), cachedir / "last.pt")
+            torch.save(
+                state_dict(
+                    model, optim, step=(step + 1), bad_evals=stopper.bad_evals
+                ),
+                cachedir / "last.pt",
+            )
 
             logger.flush()
 
@@ -246,7 +318,10 @@ def train_auto_encoder(outdir, config):
         labels = loader.train.dataset.adata.obs[config.data.condition]
         compute_scgen_shift(model, loader.train.dataset, labels=labels)
 
-    torch.save(state_dict(model, optim, step=step), cachedir / "last.pt")
+    torch.save(
+        state_dict(model, optim, step=step, bad_evals=stopper.bad_evals),
+        cachedir / "last.pt",
+    )
 
     logger.flush()
 

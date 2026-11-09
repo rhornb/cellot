@@ -24,3 +24,4 @@ training:
   cache_freq: 1000
   eval_freq: 250
   logs_freq: 50
+  patience: 40
